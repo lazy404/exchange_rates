@@ -1,5 +1,10 @@
 # exchange_rates
 
+[![Rust](https://img.shields.io/badge/rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org)
+[![MCP](https://img.shields.io/badge/MCP-compatible-blue?logo=anthropic)](https://modelcontextprotocol.io)
+[![Data source](https://img.shields.io/badge/data-ECB_Data_Portal-003591?logo=europeanunion&logoColor=white)](https://data-api.ecb.europa.eu)
+[![Build](https://img.shields.io/badge/build-cargo-green?logo=rust)](https://doc.rust-lang.org/cargo/)
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that provides EUR/USD exchange rates sourced directly from the **European Central Bank (ECB)**. Connect it to Claude to look up historical rates and convert amounts between EUR and USD by date.
 
 ## Tools
