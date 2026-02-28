@@ -14,6 +14,7 @@ use crate::rates::{EcbRateSource, RateSource};
 const LOOKBACK_DAYS: i64 = 10;
 
 const SUPPORTED_CURRENCIES: &[&str] = &[
+    "EUR",
     "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK",
     "GBP", "HKD", "HUF", "IDR", "ILS", "INR", "ISK", "JPY",
     "KRW", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "RON",
@@ -92,6 +93,13 @@ impl ExchangeRateServer {
         #[tool(aggr)] GetRateParams { date, currency }: GetRateParams,
     ) -> Result<CallToolResult, McpError> {
         let currency = validate_currency(&currency)?;
+        if currency == "EUR" {
+            return Err(McpError::invalid_params(
+                "EUR is the base currency — get_exchange_rate requires a non-EUR currency. \
+                 Use convert_currency if you want to convert amounts.",
+                None,
+            ));
+        }
         let (actual_date, rate) = self.get_rate(&date, &currency).await.map_err(|e| {
             McpError::internal_error(format!("Failed to fetch ECB rate: {e}"), None)
         })?;
@@ -183,6 +191,52 @@ mod tests {
         assert!(err.to_string().contains("XYZ"), "unexpected error: {err}");
     }
 
+    #[tokio::test]
+    async fn eur_is_rejected_in_get_exchange_rate() {
+        let server = ExchangeRateServer::default();
+        // EUR is the base currency — asking for "EUR/EUR" is meaningless.
+        let params = GetRateParams {
+            date: "2025-01-02".to_string(),
+            currency: "EUR".to_string(),
+        };
+        let err = server.get_exchange_rate(params).await.unwrap_err();
+        assert!(
+            err.to_string().contains("base currency"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn convert_eur_to_usd_works() {
+        let server = ExchangeRateServer::default();
+        let params = ConvertParams {
+            amount: 100.0,
+            from: "EUR".to_string(),
+            to: "USD".to_string(),
+            date: "2025-01-02".to_string(),
+        };
+        let result = server.convert_currency(params).await.unwrap();
+        let text = &result.content[0].as_text().unwrap().text;
+        // EUR/USD on 2025-01-02 is 1.0321 → 100 EUR = 103.21 USD
+        assert!(text.contains("100.00 EUR"), "unexpected result: {text}");
+        assert!(text.contains("USD"), "unexpected result: {text}");
+    }
+
+    #[tokio::test]
+    async fn convert_usd_to_eur_works() {
+        let server = ExchangeRateServer::default();
+        let params = ConvertParams {
+            amount: 103.21,
+            from: "USD".to_string(),
+            to: "EUR".to_string(),
+            date: "2025-01-02".to_string(),
+        };
+        let result = server.convert_currency(params).await.unwrap();
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("103.21 USD"), "unexpected result: {text}");
+        assert!(text.contains("EUR"), "unexpected result: {text}");
+    }
+
     #[test]
     fn supported_currency_is_accepted() {
         assert_eq!(validate_currency("usd").unwrap(), "USD");
@@ -199,7 +253,7 @@ mod tests {
         let server = ExchangeRateServer::default();
         let mut failed = Vec::new();
 
-        for &currency in SUPPORTED_CURRENCIES {
+        for &currency in SUPPORTED_CURRENCIES.iter().filter(|&&c| c != "EUR") {
             match server.get_rate("2025-01-02", currency).await {
                 Ok((_, rate)) if rate > 0.0 => {}
                 Ok((_, rate)) => failed.push(format!("{currency}: non-positive rate {rate}")),
