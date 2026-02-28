@@ -39,7 +39,7 @@ impl RateSource for EcbRateSource {
     async fn rate_for_day(&self, date: NaiveDate) -> Result<Option<f64>> {
         let mut cache = self.cache.lock().await;
         if !cache.contains_key(&date) {
-            ecb::fetch_year_into(date.year(), &mut cache).await?;
+            ecb::fetch_year_into(date.year(), &mut cache, ecb::ECB_BASE).await?;
         }
         Ok(*cache.get(&date).unwrap_or(&None))
     }

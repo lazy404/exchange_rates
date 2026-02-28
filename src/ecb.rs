@@ -4,7 +4,7 @@ use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-const ECB_BASE: &str =
+pub(crate) const ECB_BASE: &str =
     "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A";
 
 // ECB CSV response format (one row per trading day, non-trading days omitted):
@@ -33,7 +33,7 @@ struct EcbRecord {
 ///
 /// Returns an error immediately — without making any HTTP request — if `year`
 /// is entirely in the future.
-pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f64>>) -> Result<()> {
+pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f64>>, base_url: &str) -> Result<()> {
     let today = Utc::now().with_timezone(&Berlin).date_naive();
 
     let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)
@@ -46,7 +46,7 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
     let dec31 = NaiveDate::from_ymd_opt(year, 12, 31).expect("valid year-end date");
     let end = dec31.min(today);
 
-    let url = format!("{ECB_BASE}?startPeriod={jan1}&endPeriod={end}&format=csvdata");
+    let url = format!("{base_url}?startPeriod={jan1}&endPeriod={end}&format=csvdata");
 
     let text = reqwest::get(&url)
         .await?
@@ -77,8 +77,13 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         bail!("No exchange rate data available for year {year}");
     }
 
-    // Backfill every non-trading day in [jan1, end] with None.
-    for day in jan1.iter_days().take_while(|d| *d <= end) {
+    // Backfill non-trading days in [jan1, end) with None, deliberately
+    // excluding today. Today stays absent from the cache so that subsequent
+    // requests trigger a fresh fetch once ECB publishes the rate (~15:00 CET).
+    // Without this exclusion, a pre-publication fetch would permanently cache
+    // today as None for the lifetime of the server process.
+    let backfill_end = end.pred_opt().unwrap_or(end);
+    for day in jan1.iter_days().take_while(|d| *d <= backfill_end) {
         rates.entry(day).or_insert(None);
     }
 
@@ -90,9 +95,43 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn today_not_cached_as_none_before_ecb_publishes() {
+        use chrono::Datelike;
+        use chrono_tz::Europe::Berlin;
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Simulate an ECB response that contains no entry for today —
+        // exactly as the real API behaves before ~15:00 CET on a trading day.
+        let csv = "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\n\
+                   EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2025-01-02,1.0321\n\
+                   EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2025-01-03,1.0299\n";
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string(csv))
+            .mount(&server)
+            .await;
+
+        let today = Utc::now().with_timezone(&Berlin).date_naive();
+        let mut rates = HashMap::new();
+        fetch_year_into(today.year(), &mut rates, &server.uri())
+            .await
+            .unwrap();
+
+        assert_ne!(
+            rates.get(&today),
+            Some(&None),
+            "today ({today}) must not be cached as None — \
+             a pre-publication fetch must leave today absent so the \
+             next request re-fetches and picks up the published rate"
+        );
+    }
+
+    #[tokio::test]
     async fn non_trading_days_marked_none() {
         let mut rates = HashMap::new();
-        fetch_year_into(2025, &mut rates).await.unwrap();
+        fetch_year_into(2025, &mut rates, ECB_BASE).await.unwrap();
 
         // Jan 1 (holiday) and Jan 4–5 (weekend) must be explicitly None.
         assert_eq!(rates[&NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()], None);
