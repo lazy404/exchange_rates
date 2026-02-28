@@ -14,7 +14,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that p
 | `get_exchange_rate` | Returns the ECB rate for a given EUR/X currency pair and date |
 | `convert_currency` | Converts an amount between EUR and another currency using the ECB rate for a given date |
 
-If the requested date falls on a weekend or public holiday, the server automatically returns the most recent available rate (looking back up to 10 days).
+If the requested date falls on a weekend or public holiday, the server automatically returns the most recent available rate (looking back up to 10 days). Every response includes a direct link to the ECB CSV data for the date used, so the source can be verified.
 
 ## Supported currencies
 

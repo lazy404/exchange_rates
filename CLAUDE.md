@@ -39,7 +39,7 @@ This is an **MCP (Model Context Protocol) server** that exposes EUR exchange rat
 - **`src/main.rs`** — Entry point. Initializes tracing (stderr only), creates `ExchangeRateServer`, and serves it over stdio using the `rmcp` crate.
 - **`src/server.rs`** — Defines `ExchangeRateServer` and its two MCP tools via the `#[tool]` macro from `rmcp`. Tool parameter structs derive `JsonSchema` (via `schemars`) so the MCP framework can auto-generate schemas. Contains `SUPPORTED_CURRENCIES` (31 entries including EUR) and the lookback logic (`LOOKBACK_DAYS = 10`) that walks backward from the requested date to skip weekends and holidays.
 - **`src/rates.rs`** — Defines the `RateSource` trait and `EcbRateSource`, which implements a lazy per-(currency, year) in-memory cache (`HashMap<(String, NaiveDate), Option<f64>>`). `Some(rate)` = trading day, `None` = non-trading day in a fetched (currency, year) pair, absent = not yet loaded.
-- **`src/ecb.rs`** — HTTP client. Fetches CSV data from the ECB API via `ecb_currency_url(currency)`, parses it with the `csv` crate, and writes results into the cache via `fetch_year_into`. Backfills every non-trading day in the fetched year range with `None`, but excludes today so a pre-publication fetch doesn't permanently cache a missing rate.
+- **`src/ecb.rs`** — HTTP client. Fetches CSV data from the ECB API via `ecb_currency_url(currency)`, parses it with the `csv` crate, and writes results into the cache via `fetch_year_into`. Backfills every non-trading day in the fetched year range with `None`, but excludes today so a pre-publication fetch doesn't permanently cache a missing rate. `ecb_csv_url(currency, date)` builds the single-day URL returned in tool responses.
 
 ### MCP tools exposed
 
@@ -54,4 +54,5 @@ This is an **MCP (Model Context Protocol) server** that exposes EUR exchange rat
 - Rates are only available on **ECB business days**. When a date has no rate, `server.rs` walks back up to `LOOKBACK_DAYS` (10) days to find the most recent available rate.
 - "Today" is always evaluated in **CET (Europe/Berlin)** timezone, in both the future-date check and the cache backfill exclusion.
 - The ECB API URL is built per-currency by `ecb_currency_url()` in `ecb.rs`: `https://data-api.ecb.europa.eu/service/data/EXR/D.{CURRENCY}.EUR.SP00.A` — a full calendar year is fetched at a time with `?startPeriod=&endPeriod=&format=csvdata`.
-- **Most tests hit the live ECB API** — `ecb.rs` has two wiremock-based tests that don't require internet; everything else does.
+- Both tools include a direct **ECB CSV URL** for the specific date used in the response (the actual date after any lookback), so callers can verify the raw source data.
+- **Most tests hit the live ECB API** — `ecb.rs` has three wiremock-based tests that don't require internet; everything else does.
