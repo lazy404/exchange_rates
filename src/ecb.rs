@@ -77,13 +77,11 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         bail!("No exchange rate data available for year {year}");
     }
 
-    // Backfill non-trading days in [jan1, end) with None, deliberately
-    // excluding today. Today stays absent from the cache so that subsequent
-    // requests trigger a fresh fetch once ECB publishes the rate (~15:00 CET).
-    // Without this exclusion, a pre-publication fetch would permanently cache
-    // today as None for the lifetime of the server process.
-    let backfill_end = end.pred_opt().unwrap_or(end);
-    for day in jan1.iter_days().take_while(|d| *d <= backfill_end) {
+    // Backfill non-trading days in [jan1, end] with None, excluding only
+    // today. Today stays absent so subsequent requests re-fetch once ECB
+    // publishes the rate (~15:00 CET). All other days — including Dec 31 of
+    // past years — are backfilled normally so they don't cause repeated fetches.
+    for day in jan1.iter_days().take_while(|d| *d <= end && *d != today) {
         rates.entry(day).or_insert(None);
     }
 
@@ -125,6 +123,21 @@ mod tests {
             "today ({today}) must not be cached as None — \
              a pre-publication fetch must leave today absent so the \
              next request re-fetches and picks up the published rate"
+        );
+    }
+
+    #[tokio::test]
+    async fn dec31_non_trading_day_is_backfilled() {
+        // Dec 31 2023 was a Sunday — ECB published no rate.
+        // It must be explicitly cached as None so requests for that date
+        // don't trigger repeated full-year re-fetches.
+        let mut rates = HashMap::new();
+        fetch_year_into(2023, &mut rates, ECB_BASE).await.unwrap();
+        let dec31 = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
+        assert_eq!(
+            rates.get(&dec31),
+            Some(&None),
+            "Dec 31 2023 (Sunday) must be cached as None, not left absent"
         );
     }
 
