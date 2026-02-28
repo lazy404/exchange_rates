@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -48,7 +48,11 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
 
     let url = format!("{base_url}?startPeriod={jan1}&endPeriod={end}&format=csvdata");
 
-    let text = reqwest::get(&url)
+    let text = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?
+        .get(&url)
+        .send()
         .await?
         .error_for_status()?
         .text()
@@ -66,6 +70,12 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         let record = result?;
         let date = NaiveDate::parse_from_str(&record.time_period, "%Y-%m-%d")
             .map_err(|e| anyhow!("Invalid date '{}' from ECB: {e}", record.time_period))?;
+        if date.year() != year {
+            bail!(
+                "ECB returned date '{}' outside requested year {year}",
+                record.time_period
+            );
+        }
         if !record.obs_value.is_finite() || record.obs_value <= 0.0 {
             bail!("ECB returned invalid rate {} for {}", record.obs_value, record.time_period);
         }
@@ -94,24 +104,27 @@ mod tests {
 
     #[tokio::test]
     async fn today_not_cached_as_none_before_ecb_publishes() {
-        use chrono::Datelike;
         use chrono_tz::Europe::Berlin;
         use wiremock::matchers::any;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let today = Utc::now().with_timezone(&Berlin).date_naive();
+
         // Simulate an ECB response that contains no entry for today —
         // exactly as the real API behaves before ~15:00 CET on a trading day.
-        let csv = "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\n\
-                   EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2025-01-02,1.0321\n\
-                   EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2025-01-03,1.0299\n";
+        // Use Jan 2-3 of the current year so the year-validation check passes.
+        let year = today.year();
+        let csv = format!(
+            "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\n\
+             EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,{year}-01-02,1.0321\n\
+             EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,{year}-01-03,1.0299\n"
+        );
 
         let server = MockServer::start().await;
         Mock::given(any())
             .respond_with(ResponseTemplate::new(200).set_body_string(csv))
             .mount(&server)
             .await;
-
-        let today = Utc::now().with_timezone(&Berlin).date_naive();
         let mut rates = HashMap::new();
         fetch_year_into(today.year(), &mut rates, &server.uri())
             .await
@@ -123,6 +136,31 @@ mod tests {
             "today ({today}) must not be cached as None — \
              a pre-publication fetch must leave today absent so the \
              next request re-fetches and picks up the published rate"
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_year_in_csv_is_rejected() {
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // ECB response containing a date from the wrong year.
+        let csv = "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\n\
+                   EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2024-12-31,1.0389\n";
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string(csv))
+            .mount(&server)
+            .await;
+
+        let mut rates = HashMap::new();
+        let err = fetch_year_into(2025, &mut rates, &server.uri())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("outside requested year"),
+            "unexpected error: {err}"
         );
     }
 
