@@ -8,6 +8,13 @@ pub(crate) fn ecb_currency_url(currency: &str) -> String {
     format!("https://data-api.ecb.europa.eu/service/data/EXR/D.{currency}.EUR.SP00.A")
 }
 
+pub(crate) fn ecb_csv_url(currency: &str, date: NaiveDate) -> String {
+    format!(
+        "https://data-api.ecb.europa.eu/service/data/EXR/D.{currency}.EUR.SP00.A\
+         ?startPeriod={date}&endPeriod={date}&format=csvdata"
+    )
+}
+
 // ECB CSV response format (one row per trading day, non-trading days omitted):
 //
 // KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE,...

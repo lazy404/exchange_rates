@@ -9,6 +9,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::ecb;
 use crate::rates::{EcbRateSource, RateSource};
 
 const LOOKBACK_DAYS: i64 = 10;
@@ -104,8 +105,9 @@ impl ExchangeRateServer {
             McpError::internal_error(format!("Failed to fetch ECB rate: {e}"), None)
         })?;
 
+        let url = ecb::ecb_csv_url(&currency, actual_date);
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "EUR/{currency} rate on {actual_date}: 1 EUR = {rate} {currency} (source: ECB)"
+            "EUR/{currency} rate on {actual_date}: 1 EUR = {rate} {currency} (source: {url})"
         ))]))
     }
 
@@ -142,8 +144,9 @@ impl ExchangeRateServer {
 
         let result = if to_eur { amount / rate } else { amount * rate };
 
+        let url = ecb::ecb_csv_url(foreign, actual_date);
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{amount:.2} {from} = {result:.2} {to} (rate: 1 EUR = {rate:.4} {foreign}, date: {actual_date})"
+            "{amount:.2} {from} = {result:.2} {to} (rate: 1 EUR = {rate:.4} {foreign}, date: {actual_date}, source: {url})"
         ))]))
     }
 }
