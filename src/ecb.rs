@@ -4,8 +4,9 @@ use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-pub(crate) const ECB_BASE: &str =
-    "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A";
+pub(crate) fn ecb_currency_url(currency: &str) -> String {
+    format!("https://data-api.ecb.europa.eu/service/data/EXR/D.{currency}.EUR.SP00.A")
+}
 
 // ECB CSV response format (one row per trading day, non-trading days omitted):
 //
@@ -21,19 +22,24 @@ struct EcbRecord {
     obs_value: f64,
 }
 
-/// Fetch all trading-day rates for the given calendar year from ECB and merge
-/// them into `rates`.
+/// Fetch all trading-day rates for the given calendar year and currency from ECB
+/// and merge them into `rates`.
 ///
 /// Every calendar day in `[Jan 1, min(Dec 31, today)]` is written into the map:
 /// - `Some(rate)` for days the ECB published a rate (trading days).
 /// - `None` for all other days in that range (weekends, holidays).
 ///
-/// Future dates are never written, so they remain absent and will trigger a
-/// fresh fetch once they are no longer in the future.
+/// Today is excluded from the backfill so it stays absent and triggers a fresh
+/// fetch once ECB publishes the rate (~15:00 CET).
 ///
 /// Returns an error immediately — without making any HTTP request — if `year`
 /// is entirely in the future.
-pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f64>>, base_url: &str) -> Result<()> {
+pub async fn fetch_year_into(
+    year: i32,
+    currency: &str,
+    rates: &mut HashMap<(String, NaiveDate), Option<f64>>,
+    base_url: &str,
+) -> Result<()> {
     let today = Utc::now().with_timezone(&Berlin).date_naive();
 
     let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)
@@ -59,11 +65,12 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         .await?;
 
     if text.is_empty() {
-        bail!("No exchange rate data available for year {year}");
+        bail!("No exchange rate data available for {currency} in year {year}");
     }
 
     // Insert Some(rate) for every trading day first. If parsing fails partway
     // through, only correct Some values have been written — no None poisoning.
+    let currency_upper = currency.to_uppercase();
     let mut trading_days = 0usize;
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     for result in reader.deserialize::<EcbRecord>() {
@@ -79,12 +86,12 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         if !record.obs_value.is_finite() || record.obs_value <= 0.0 {
             bail!("ECB returned invalid rate {} for {}", record.obs_value, record.time_period);
         }
-        rates.insert(date, Some(record.obs_value));
+        rates.insert((currency_upper.clone(), date), Some(record.obs_value));
         trading_days += 1;
     }
 
     if trading_days == 0 {
-        bail!("No exchange rate data available for year {year}");
+        bail!("No exchange rate data available for {currency} in year {year}");
     }
 
     // Backfill non-trading days in [jan1, end] with None, excluding only
@@ -92,7 +99,7 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
     // publishes the rate (~15:00 CET). All other days — including Dec 31 of
     // past years — are backfilled normally so they don't cause repeated fetches.
     for day in jan1.iter_days().take_while(|d| *d <= end && *d != today) {
-        rates.entry(day).or_insert(None);
+        rates.entry((currency_upper.clone(), day)).or_insert(None);
     }
 
     Ok(())
@@ -126,12 +133,12 @@ mod tests {
             .mount(&server)
             .await;
         let mut rates = HashMap::new();
-        fetch_year_into(today.year(), &mut rates, &server.uri())
+        fetch_year_into(today.year(), "USD", &mut rates, &server.uri())
             .await
             .unwrap();
 
         assert_ne!(
-            rates.get(&today),
+            rates.get(&("USD".to_string(), today)),
             Some(&None),
             "today ({today}) must not be cached as None — \
              a pre-publication fetch must leave today absent so the \
@@ -155,7 +162,7 @@ mod tests {
             .await;
 
         let mut rates = HashMap::new();
-        let err = fetch_year_into(2025, &mut rates, &server.uri())
+        let err = fetch_year_into(2025, "USD", &mut rates, &server.uri())
             .await
             .unwrap_err();
         assert!(
@@ -170,10 +177,12 @@ mod tests {
         // It must be explicitly cached as None so requests for that date
         // don't trigger repeated full-year re-fetches.
         let mut rates = HashMap::new();
-        fetch_year_into(2023, &mut rates, ECB_BASE).await.unwrap();
+        fetch_year_into(2023, "USD", &mut rates, &ecb_currency_url("USD"))
+            .await
+            .unwrap();
         let dec31 = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
         assert_eq!(
-            rates.get(&dec31),
+            rates.get(&("USD".to_string(), dec31)),
             Some(&None),
             "Dec 31 2023 (Sunday) must be cached as None, not left absent"
         );
@@ -182,15 +191,19 @@ mod tests {
     #[tokio::test]
     async fn non_trading_days_marked_none() {
         let mut rates = HashMap::new();
-        fetch_year_into(2025, &mut rates, ECB_BASE).await.unwrap();
+        fetch_year_into(2025, "USD", &mut rates, &ecb_currency_url("USD"))
+            .await
+            .unwrap();
+
+        let key = |m, d| ("USD".to_string(), NaiveDate::from_ymd_opt(2025, m, d).unwrap());
 
         // Jan 1 (holiday) and Jan 4–5 (weekend) must be explicitly None.
-        assert_eq!(rates[&NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()], None);
-        assert_eq!(rates[&NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()], None);
-        assert_eq!(rates[&NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()], None);
+        assert_eq!(rates[&key(1, 1)], None);
+        assert_eq!(rates[&key(1, 4)], None);
+        assert_eq!(rates[&key(1, 5)], None);
 
         // Jan 2 and Jan 3 are trading days — must be Some.
-        assert!(rates[&NaiveDate::from_ymd_opt(2025, 1, 2).unwrap()].is_some());
-        assert!(rates[&NaiveDate::from_ymd_opt(2025, 1, 3).unwrap()].is_some());
+        assert!(rates[&key(1, 2)].is_some());
+        assert!(rates[&key(1, 3)].is_some());
     }
 }

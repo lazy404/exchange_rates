@@ -13,15 +13,34 @@ use crate::rates::{EcbRateSource, RateSource};
 
 const LOOKBACK_DAYS: i64 = 10;
 
+const SUPPORTED_CURRENCIES: &[&str] = &[
+    "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK",
+    "GBP", "HKD", "HUF", "IDR", "ILS", "INR", "ISK", "JPY",
+    "KRW", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "RON",
+    "SEK", "SGD", "THB", "TRY", "USD", "ZAR",
+];
+
+fn validate_currency(c: &str) -> Result<String, McpError> {
+    let upper = c.to_uppercase();
+    if SUPPORTED_CURRENCIES.contains(&upper.as_str()) {
+        Ok(upper)
+    } else {
+        Err(McpError::invalid_params(
+            format!("Unsupported currency '{c}'. Supported: {}", SUPPORTED_CURRENCIES.join(", ")),
+            None,
+        ))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ExchangeRateServer {
     rates: EcbRateSource,
 }
 
 impl ExchangeRateServer {
-    /// Find the most recent available EUR/USD rate on or before `date`, looking
+    /// Find the most recent available EUR/X rate on or before `date`, looking
     /// back up to [`LOOKBACK_DAYS`] days to skip weekends and holidays.
-    async fn get_rate(&self, date: &str) -> anyhow::Result<(NaiveDate, f64)> {
+    async fn get_rate(&self, date: &str, currency: &str) -> anyhow::Result<(NaiveDate, f64)> {
         let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|e| anyhow::anyhow!("Invalid date format '{date}': {e}"))?;
 
@@ -31,7 +50,7 @@ impl ExchangeRateServer {
 
         for offset in 0..=LOOKBACK_DAYS {
             let candidate = d - chrono::Duration::days(offset);
-            if let Some(rate) = RateSource::rate_for_day(&self.rates, candidate).await? {
+            if let Some(rate) = RateSource::rate_for_day(&self.rates, candidate, currency).await? {
                 return Ok((candidate, rate));
             }
         }
@@ -46,15 +65,20 @@ impl ExchangeRateServer {
 pub struct GetRateParams {
     /// Date in YYYY-MM-DD format (e.g. "2025-01-15")
     pub date: String,
+    /// ISO 4217 currency code to get the EUR rate for (e.g. "USD", "GBP", "JPY").
+    /// Returns: 1 EUR = N {currency}. Supported currencies: AUD, BGN, BRL, CAD,
+    /// CHF, CNY, CZK, DKK, GBP, HKD, HUF, IDR, ILS, INR, ISK, JPY, KRW, MXN,
+    /// MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, THB, TRY, USD, ZAR.
+    pub currency: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ConvertParams {
     /// Amount to convert
     pub amount: f64,
-    /// Source currency: "EUR" or "USD"
+    /// Source currency: "EUR" or any supported non-EUR currency
     pub from: String,
-    /// Target currency: "EUR" or "USD"
+    /// Target currency: "EUR" or any supported non-EUR currency
     pub to: String,
     /// Date in YYYY-MM-DD format (e.g. "2025-01-15")
     pub date: String,
@@ -62,46 +86,56 @@ pub struct ConvertParams {
 
 #[tool(tool_box)]
 impl ExchangeRateServer {
-    #[tool(description = "Get the EUR/USD exchange rate from the European Central Bank for a specific date. Only use this when the rate itself is what is being asked for. To convert an amount between EUR and USD, use convert_currency instead — do not fetch the rate and compute the conversion yourself.")]
+    #[tool(description = "Get the EUR exchange rate for a specific currency and date from the European Central Bank. Returns '1 EUR = N {currency}'. Only use this when the rate itself is what is being asked for. To convert an amount, use convert_currency instead.")]
     async fn get_exchange_rate(
         &self,
-        #[tool(aggr)] GetRateParams { date }: GetRateParams,
+        #[tool(aggr)] GetRateParams { date, currency }: GetRateParams,
     ) -> Result<CallToolResult, McpError> {
-        let (actual_date, rate) = self.get_rate(&date).await.map_err(|e| {
+        let currency = validate_currency(&currency)?;
+        let (actual_date, rate) = self.get_rate(&date, &currency).await.map_err(|e| {
             McpError::internal_error(format!("Failed to fetch ECB rate: {e}"), None)
         })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "EUR/USD rate on {actual_date}: 1 EUR = {rate} USD (source: ECB)"
+            "EUR/{currency} rate on {actual_date}: 1 EUR = {rate} {currency} (source: ECB)"
         ))]))
     }
 
-    #[tool(description = "Convert an amount between EUR and USD using the ECB exchange rate for a specific date. Always use this tool when the user wants to convert a sum of money — never call get_exchange_rate and compute the result yourself.")]
+    #[tool(description = "Convert an amount between EUR and another currency using the ECB exchange rate for a specific date. One of 'from' or 'to' must be EUR. Always use this tool when the user wants to convert a sum of money — never call get_exchange_rate and compute the result yourself.")]
     async fn convert_currency(
         &self,
         #[tool(aggr)] ConvertParams { amount, from, to, date }: ConvertParams,
     ) -> Result<CallToolResult, McpError> {
-        let (actual_date, rate) = self.get_rate(&date).await.map_err(|e| {
-            McpError::internal_error(format!("Failed to fetch ECB rate: {e}"), None)
-        })?;
+        let from = validate_currency(&from)?;
+        let to = validate_currency(&to)?;
 
-        let from = from.to_uppercase();
-        let to = to.to_uppercase();
+        // Same currency — no fetch needed.
+        if from == to {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "{amount:.2} {from} = {amount:.2} {to}"
+            ))]));
+        }
 
-        let result = match (from.as_str(), to.as_str()) {
-            ("EUR", "USD") => amount * rate,
-            ("USD", "EUR") => amount / rate,
-            ("EUR", "EUR") | ("USD", "USD") => amount,
+        // Determine the foreign (non-EUR) currency and the conversion direction.
+        let (foreign, to_eur) = match (from.as_str(), to.as_str()) {
+            ("EUR", _) => (&to, false),
+            (_, "EUR") => (&from, true),
             _ => {
                 return Err(McpError::invalid_params(
-                    "Only EUR and USD are supported",
+                    "At least one of 'from' or 'to' must be EUR",
                     None,
                 ));
             }
         };
 
+        let (actual_date, rate) = self.get_rate(&date, foreign).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to fetch ECB rate: {e}"), None)
+        })?;
+
+        let result = if to_eur { amount / rate } else { amount * rate };
+
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{amount:.2} {from} = {result:.2} {to} (rate: 1 EUR = {rate:.4} USD, date: {actual_date})"
+            "{amount:.2} {from} = {result:.2} {to} (rate: 1 EUR = {rate:.4} {foreign}, date: {actual_date})"
         ))]))
     }
 }
@@ -111,11 +145,14 @@ impl ServerHandler for ExchangeRateServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Provides EUR/USD exchange rates from the European Central Bank (ECB). \
-                 If the requested date is a weekend or holiday, the most recent available \
-                 rate is returned automatically. Use YYYY-MM-DD date format. \
-                 When converting an amount between EUR and USD, always call convert_currency \
-                 directly — never call get_exchange_rate and perform the arithmetic yourself."
+                "Provides EUR exchange rates from the European Central Bank (ECB) for 30 \
+                 currencies: AUD, BGN, BRL, CAD, CHF, CNY, CZK, DKK, GBP, HKD, HUF, IDR, \
+                 ILS, INR, ISK, JPY, KRW, MXN, MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, \
+                 THB, TRY, USD, ZAR. If the requested date is a weekend or holiday, the \
+                 most recent available rate is returned automatically. Use YYYY-MM-DD date \
+                 format. Conversions must involve EUR on one side. When converting an amount, \
+                 always call convert_currency directly — never call get_exchange_rate and \
+                 perform the arithmetic yourself."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder()
@@ -133,10 +170,47 @@ mod tests {
     #[tokio::test]
     async fn future_date_is_rejected() {
         let server = ExchangeRateServer::default();
-        let err = server.get_rate("2099-01-01").await.unwrap_err();
+        let err = server.get_rate("2099-01-01", "USD").await.unwrap_err();
         assert!(
             err.to_string().contains("future"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unsupported_currency_is_rejected() {
+        let err = validate_currency("XYZ").unwrap_err();
+        assert!(err.to_string().contains("XYZ"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn supported_currency_is_accepted() {
+        assert_eq!(validate_currency("usd").unwrap(), "USD");
+        assert_eq!(validate_currency("GBP").unwrap(), "GBP");
+        assert_eq!(validate_currency("jpy").unwrap(), "JPY");
+    }
+
+    #[tokio::test]
+    async fn all_supported_currencies_have_ecb_rates() {
+        // Jan 2 2025 is a known ECB trading day. Verify every currency in
+        // SUPPORTED_CURRENCIES returns a positive rate for that date.
+        // A single EcbRateSource is shared so each year is fetched only once
+        // per currency.
+        let server = ExchangeRateServer::default();
+        let mut failed = Vec::new();
+
+        for &currency in SUPPORTED_CURRENCIES {
+            match server.get_rate("2025-01-02", currency).await {
+                Ok((_, rate)) if rate > 0.0 => {}
+                Ok((_, rate)) => failed.push(format!("{currency}: non-positive rate {rate}")),
+                Err(e) => failed.push(format!("{currency}: {e}")),
+            }
+        }
+
+        assert!(
+            failed.is_empty(),
+            "the following currencies failed:\n{}",
+            failed.join("\n")
         );
     }
 }
