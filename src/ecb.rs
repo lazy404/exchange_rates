@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use chrono::{NaiveDate, Utc};
+use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -33,7 +34,7 @@ struct EcbRecord {
 /// Returns an error immediately — without making any HTTP request — if `year`
 /// is entirely in the future.
 pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f64>>) -> Result<()> {
-    let today = Utc::now().date_naive();
+    let today = Utc::now().with_timezone(&Berlin).date_naive();
 
     let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)
         .ok_or_else(|| anyhow!("Invalid year {year}"))?;
@@ -65,6 +66,9 @@ pub async fn fetch_year_into(year: i32, rates: &mut HashMap<NaiveDate, Option<f6
         let record = result?;
         let date = NaiveDate::parse_from_str(&record.time_period, "%Y-%m-%d")
             .map_err(|e| anyhow!("Invalid date '{}' from ECB: {e}", record.time_period))?;
+        if !record.obs_value.is_finite() || record.obs_value <= 0.0 {
+            bail!("ECB returned invalid rate {} for {}", record.obs_value, record.time_period);
+        }
         rates.insert(date, Some(record.obs_value));
         trading_days += 1;
     }

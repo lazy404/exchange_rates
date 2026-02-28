@@ -1,5 +1,6 @@
 use anyhow::bail;
 use chrono::{NaiveDate, Utc};
+use chrono_tz::Europe::Berlin;
 use rmcp::{
     Error as McpError, ServerHandler,
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
@@ -24,7 +25,7 @@ impl ExchangeRateServer {
         let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|e| anyhow::anyhow!("Invalid date format '{date}': {e}"))?;
 
-        if d > Utc::now().date_naive() {
+        if d > Utc::now().with_timezone(&Berlin).date_naive() {
             bail!("Exchange rates are not available for future date {date}");
         }
 
@@ -36,7 +37,7 @@ impl ExchangeRateServer {
         }
 
         bail!(
-            "No exchange rate data available for {date} or the preceding {LOOKBACK_DAYS} days"
+            "No exchange rate data available for {date} or the {LOOKBACK_DAYS} preceding days"
         );
     }
 }
