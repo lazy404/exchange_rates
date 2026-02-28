@@ -71,7 +71,6 @@ pub async fn fetch_year_into(
     // Insert Some(rate) for every trading day first. If parsing fails partway
     // through, only correct Some values have been written — no None poisoning.
     let currency_upper = currency.to_uppercase();
-    let mut trading_days = 0usize;
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     for result in reader.deserialize::<EcbRecord>() {
         let record = result?;
@@ -87,11 +86,6 @@ pub async fn fetch_year_into(
             bail!("ECB returned invalid rate {} for {}", record.obs_value, record.time_period);
         }
         rates.insert((currency_upper.clone(), date), Some(record.obs_value));
-        trading_days += 1;
-    }
-
-    if trading_days == 0 {
-        bail!("No exchange rate data available for {currency} in year {year}");
     }
 
     // Backfill non-trading days in [jan1, end] with None, excluding only
@@ -144,6 +138,29 @@ mod tests {
              a pre-publication fetch must leave today absent so the \
              next request re-fetches and picks up the published rate"
         );
+    }
+
+    #[tokio::test]
+    async fn header_only_response_does_not_error() {
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A CSV with just the header and no data rows — exactly what the ECB
+        // returns when the requested range contains only non-trading days
+        // (e.g. fetching year N on Jan 1, when the only day in the range is a holiday).
+        let csv = "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\n";
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string(csv))
+            .mount(&server)
+            .await;
+
+        let mut rates = HashMap::new();
+        // Must succeed, not bail with "no exchange rate data".
+        fetch_year_into(2025, "USD", &mut rates, &server.uri())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
