@@ -26,7 +26,13 @@ Conversions must involve EUR on one side (e.g. EUR→GBP or JPY→EUR). Cross-ra
 
 - [Rust](https://rustup.rs) (edition 2024, stable toolchain)
 
-## Build
+## Installation
+
+### Download a release binary
+
+Pre-built binaries for Linux x86_64, macOS arm64, and Windows x86_64 are attached to each [GitHub Release](https://github.com/lazy404/exchange_rates/releases). Download the binary for your platform and place it somewhere on your `PATH`.
+
+### Build from source
 
 ```bash
 git clone https://github.com/lazy404/exchange_rates.git

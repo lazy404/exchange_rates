@@ -48,6 +48,11 @@ This is an **MCP (Model Context Protocol) server** that exposes EUR exchange rat
 | `get_exchange_rate` | Returns the EUR/X rate for a given currency and date. EUR itself is rejected (it's the base). |
 | `convert_currency` | Converts an amount between EUR and any supported currency for a given date. One of `from`/`to` must be EUR. |
 
+### CI / Releases
+
+- **`.github/workflows/rust.yml`** — Runs `cargo build` and `cargo test` on every push/PR to `main`.
+- **`.github/workflows/release.yml`** — Triggered by `v*.*.*` tags. Builds release binaries for Linux x86_64, macOS arm64, and Windows x86_64 in parallel, then creates a GitHub Release with the three binaries and a `SHA256SUMS` checksums file. Uses `softprops/action-gh-release@v2`. To publish a release: `git tag v1.2.3 && git push origin v1.2.3`.
+
 ### Key constraints
 
 - **Supported currencies:** EUR plus 30 ECB non-EUR currencies (AUD, BGN, BRL, CAD, CHF, CNY, CZK, DKK, GBP, HKD, HUF, IDR, ILS, INR, ISK, JPY, KRW, MXN, MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, THB, TRY, USD, ZAR). Cross-rate conversions (e.g. GBP→JPY) are not supported — one side must be EUR.
