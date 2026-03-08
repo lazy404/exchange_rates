@@ -1,5 +1,4 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +10,6 @@ use crate::ecb;
 ///
 /// Returns `Ok(Some(rate))` for trading days, `Ok(None)` for non-trading days
 /// (weekends, holidays), and `Err` if the underlying data could not be retrieved.
-#[async_trait]
 pub trait RateSource: Send + Sync {
     async fn rate_for_day(&self, date: NaiveDate, currency: &str) -> Result<Option<f64>>;
 }
@@ -30,7 +28,6 @@ pub struct EcbRateSource {
     cache: Arc<Mutex<Cache>>,
 }
 
-#[async_trait]
 impl RateSource for EcbRateSource {
     /// Returns the EUR/X rate for `currency` on `date`, or `None` if the ECB
     /// published no rate for that day. Fetches the full calendar year for the
@@ -50,7 +47,7 @@ impl RateSource for EcbRateSource {
 mod tests {
     use super::*;
 
-    const LOOKBACK_DAYS: i64 = 10;
+    use crate::server::LOOKBACK_DAYS;
 
     /// Walk back up to LOOKBACK_DAYS to find the most recent trading day rate.
     async fn rate_for(source: &EcbRateSource, date: &str, currency: &str) -> (NaiveDate, f64) {

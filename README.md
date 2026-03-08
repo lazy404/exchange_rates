@@ -21,7 +21,7 @@ If the requested date falls on a weekend or public holiday, the server automatic
 
 AUD, BGN, BRL, CAD, CHF, CNY, CZK, DKK, GBP, HKD, HUF, IDR, ILS, INR, ISK, JPY, KRW, MXN, MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, THB, TRY, USD, ZAR
 
-Conversions must involve EUR on one side (e.g. EUR→GBP or JPY→EUR). Cross-rate conversions (e.g. GBP→JPY) are not supported.
+Conversions must involve EUR on one side (e.g. EUR→GBP or JPY→EUR). Cross-rate conversions (e.g. GBP→JPY) and EUR→EUR are not supported.
 
 ## Prerequisites
 
@@ -96,7 +96,7 @@ Once connected, you can ask Claude naturally:
 
 ## Constraints
 
-- **Currencies:** EUR ↔ X only. One side of every conversion must be EUR.
+- **Currencies:** EUR ↔ X only. Exactly one side of every conversion must be EUR (EUR→EUR is rejected).
 - **Dates:** rates are available only for ECB trading days. The server walks back up to 10 days to find the nearest published rate, so weekends and public holidays resolve automatically.
 - **Future dates:** rejected with an explicit error.
 - **Data source:** [ECB Data Portal](https://data-api.ecb.europa.eu) — rates are fetched live and cached in memory per (currency, calendar year) for the lifetime of the server process.

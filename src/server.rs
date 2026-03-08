@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::ecb;
 use crate::rates::{EcbRateSource, RateSource};
 
-const LOOKBACK_DAYS: i64 = 10;
+pub(crate) const LOOKBACK_DAYS: i64 = 10;
 
 const SUPPORTED_CURRENCIES: &[&str] = &[
     "EUR",
@@ -121,6 +121,13 @@ impl ExchangeRateServer {
 
         // Same currency — no fetch needed.
         if from == to {
+            if from == "EUR" {
+                return Err(McpError::invalid_params(
+                    "EUR is the base currency — converting EUR to EUR is not meaningful. \
+                     Specify a non-EUR currency on one side.",
+                    None,
+                ));
+            }
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "{amount:.2} {from} = {amount:.2} {to}"
             ))]));
