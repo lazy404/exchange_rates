@@ -46,6 +46,7 @@ pub async fn fetch_year_into(
     currency: &str,
     rates: &mut HashMap<(String, NaiveDate), Option<f64>>,
     base_url: &str,
+    client: &reqwest::Client,
 ) -> Result<()> {
     let today = Utc::now().with_timezone(&Berlin).date_naive();
 
@@ -61,9 +62,7 @@ pub async fn fetch_year_into(
 
     let url = format!("{base_url}?startPeriod={jan1}&endPeriod={end}&format=csvdata");
 
-    let text = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?
+    let text = client
         .get(&url)
         .send()
         .await?
@@ -134,7 +133,8 @@ mod tests {
             .mount(&server)
             .await;
         let mut rates = HashMap::new();
-        fetch_year_into(today.year(), "USD", &mut rates, &server.uri())
+        let client = reqwest::Client::new();
+        fetch_year_into(today.year(), "USD", &mut rates, &server.uri(), &client)
             .await
             .unwrap();
 
@@ -164,8 +164,9 @@ mod tests {
             .await;
 
         let mut rates = HashMap::new();
+        let client = reqwest::Client::new();
         // Must succeed, not bail with "no exchange rate data".
-        fetch_year_into(2025, "USD", &mut rates, &server.uri())
+        fetch_year_into(2025, "USD", &mut rates, &server.uri(), &client)
             .await
             .unwrap();
     }
@@ -186,7 +187,8 @@ mod tests {
             .await;
 
         let mut rates = HashMap::new();
-        let err = fetch_year_into(2025, "USD", &mut rates, &server.uri())
+        let client = reqwest::Client::new();
+        let err = fetch_year_into(2025, "USD", &mut rates, &server.uri(), &client)
             .await
             .unwrap_err();
         assert!(
@@ -201,7 +203,8 @@ mod tests {
         // It must be explicitly cached as None so requests for that date
         // don't trigger repeated full-year re-fetches.
         let mut rates = HashMap::new();
-        fetch_year_into(2023, "USD", &mut rates, &ecb_currency_url("USD"))
+        let client = reqwest::Client::new();
+        fetch_year_into(2023, "USD", &mut rates, &ecb_currency_url("USD"), &client)
             .await
             .unwrap();
         let dec31 = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
@@ -215,7 +218,8 @@ mod tests {
     #[tokio::test]
     async fn non_trading_days_marked_none() {
         let mut rates = HashMap::new();
-        fetch_year_into(2025, "USD", &mut rates, &ecb_currency_url("USD"))
+        let client = reqwest::Client::new();
+        fetch_year_into(2025, "USD", &mut rates, &ecb_currency_url("USD"), &client)
             .await
             .unwrap();
 

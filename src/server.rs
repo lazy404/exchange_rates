@@ -111,7 +111,7 @@ impl ExchangeRateServer {
         ))]))
     }
 
-    #[tool(description = "Convert an amount between EUR and another currency using the ECB exchange rate for a specific date. One of 'from' or 'to' must be EUR. Always use this tool when the user wants to convert a sum of money — never call get_exchange_rate and compute the result yourself.")]
+    #[tool(description = "Convert an amount between EUR and another currency using the ECB exchange rate for a specific date. Exactly one of 'from' or 'to' must be EUR — EUR→EUR is not supported. Always use this tool when the user wants to convert a sum of money — never call get_exchange_rate and compute the result yourself.")]
     async fn convert_currency(
         &self,
         #[tool(aggr)] ConvertParams { amount, from, to, date }: ConvertParams,
@@ -168,7 +168,8 @@ impl ServerHandler for ExchangeRateServer {
                  ILS, INR, ISK, JPY, KRW, MXN, MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, \
                  THB, TRY, USD, ZAR. If the requested date is a weekend or holiday, the \
                  most recent available rate is returned automatically. Use YYYY-MM-DD date \
-                 format. Conversions must involve EUR on one side. When converting an amount, \
+                 format. Conversions must involve EUR on exactly one side (EUR→EUR is not \
+                 supported). When converting an amount, \
                  always call convert_currency directly — never call get_exchange_rate and \
                  perform the arithmetic yourself."
                     .into(),

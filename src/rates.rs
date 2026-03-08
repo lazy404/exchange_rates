@@ -23,9 +23,22 @@ type Cache = HashMap<(String, NaiveDate), Option<f64>>;
 
 /// [`RateSource`] implementation backed by the ECB data API with a lazy
 /// per-(currency, year) in-memory cache.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EcbRateSource {
     cache: Arc<Mutex<Cache>>,
+    client: reqwest::Client,
+}
+
+impl Default for EcbRateSource {
+    fn default() -> Self {
+        Self {
+            cache: Arc::default(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("failed to build reqwest client"),
+        }
+    }
 }
 
 impl RateSource for EcbRateSource {
@@ -34,11 +47,23 @@ impl RateSource for EcbRateSource {
     /// given currency on first access and caches it for subsequent lookups.
     async fn rate_for_day(&self, date: NaiveDate, currency: &str) -> Result<Option<f64>> {
         let currency = currency.to_uppercase();
-        let mut cache = self.cache.lock().await;
-        if !cache.contains_key(&(currency.clone(), date)) {
-            let url = ecb::ecb_currency_url(&currency);
-            ecb::fetch_year_into(date.year(), &currency, &mut cache, &url).await?;
+
+        // Check cache without holding the lock during I/O.
+        {
+            let cache = self.cache.lock().await;
+            if cache.contains_key(&(currency.clone(), date)) {
+                return Ok(*cache.get(&(currency, date)).unwrap_or(&None));
+            }
         }
+
+        // Fetch the full year into a temporary map — no lock held during the HTTP request.
+        let url = ecb::ecb_currency_url(&currency);
+        let mut fetched = HashMap::new();
+        ecb::fetch_year_into(date.year(), &currency, &mut fetched, &url, &self.client).await?;
+
+        // Merge into the shared cache and return.
+        let mut cache = self.cache.lock().await;
+        cache.extend(fetched);
         Ok(*cache.get(&(currency, date)).unwrap_or(&None))
     }
 }
