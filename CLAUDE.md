@@ -23,6 +23,9 @@ cargo test
 # Run a single test
 cargo test <test_name>
 
+# Run tests with output visible (useful for debugging)
+cargo test <test_name> -- --nocapture
+
 # Lint
 cargo clippy
 
@@ -55,6 +58,8 @@ This is an **MCP (Model Context Protocol) server** that exposes EUR exchange rat
 
 ### Key constraints
 
+- **Rust edition:** 2024 — uses native async trait syntax (`async fn` in traits without `async-trait` crate). Requires Rust 1.85+.
+- **To add a new currency:** add the ticker to `SUPPORTED_CURRENCIES` in `src/server.rs` — ECB must support it at the standard EXR endpoint.
 - **Supported currencies:** EUR plus 30 ECB non-EUR currencies (AUD, BGN, BRL, CAD, CHF, CNY, CZK, DKK, GBP, HKD, HUF, IDR, ILS, INR, ISK, JPY, KRW, MXN, MYR, NOK, NZD, PHP, PLN, RON, SEK, SGD, THB, TRY, USD, ZAR). Cross-rate conversions (e.g. GBP→JPY) and same-currency conversions are not supported — exactly one side must be EUR.
 - Rates are only available on **ECB business days**. When a date has no rate, `server.rs` walks back up to `LOOKBACK_DAYS` (10) days to find the most recent available rate.
 - "Today" is always evaluated in **CET (Europe/Berlin)** timezone, in both the future-date check and the cache backfill exclusion.
