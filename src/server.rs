@@ -119,18 +119,13 @@ impl ExchangeRateServer {
         let from = validate_currency(&from)?;
         let to = validate_currency(&to)?;
 
-        // Same currency — no fetch needed.
+        // Same currency — reject regardless of which currency it is.
         if from == to {
-            if from == "EUR" {
-                return Err(McpError::invalid_params(
-                    "EUR is the base currency — converting EUR to EUR is not meaningful. \
-                     Specify a non-EUR currency on one side.",
-                    None,
-                ));
-            }
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "{amount:.2} {from} = {amount:.2} {to}"
-            ))]));
+            return Err(McpError::invalid_params(
+                format!("Converting {from} to {from} is not meaningful. \
+                         Exactly one of 'from' or 'to' must be EUR."),
+                None,
+            ));
         }
 
         // Determine the foreign (non-EUR) currency and the conversion direction.
