@@ -44,7 +44,7 @@ struct EcbRecord {
 pub async fn fetch_year_into(
     year: i32,
     currency: &str,
-    rates: &mut HashMap<(String, NaiveDate), Option<f64>>,
+    rates: &mut HashMap<NaiveDate, Option<f64>>,
     base_url: &str,
     client: &reqwest::Client,
 ) -> Result<()> {
@@ -76,7 +76,6 @@ pub async fn fetch_year_into(
 
     // Insert Some(rate) for every trading day first. If parsing fails partway
     // through, only correct Some values have been written — no None poisoning.
-    let currency_upper = currency.to_uppercase();
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     for result in reader.deserialize::<EcbRecord>() {
         let record = result?;
@@ -91,7 +90,7 @@ pub async fn fetch_year_into(
         if !record.obs_value.is_finite() || record.obs_value <= 0.0 {
             bail!("ECB returned invalid rate {} for {}", record.obs_value, record.time_period);
         }
-        rates.insert((currency_upper.clone(), date), Some(record.obs_value));
+        rates.insert(date, Some(record.obs_value));
     }
 
     // Backfill non-trading days in [jan1, end] with None, excluding only
@@ -99,7 +98,7 @@ pub async fn fetch_year_into(
     // publishes the rate (~15:00 CET). All other days — including Dec 31 of
     // past years — are backfilled normally so they don't cause repeated fetches.
     for day in jan1.iter_days().take_while(|d| *d <= end && *d != today) {
-        rates.entry((currency_upper.clone(), day)).or_insert(None);
+        rates.entry(day).or_insert(None);
     }
 
     Ok(())
@@ -139,7 +138,7 @@ mod tests {
             .unwrap();
 
         assert_ne!(
-            rates.get(&("USD".to_string(), today)),
+            rates.get(&today),
             Some(&None),
             "today ({today}) must not be cached as None — \
              a pre-publication fetch must leave today absent so the \
@@ -209,7 +208,7 @@ mod tests {
             .unwrap();
         let dec31 = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
         assert_eq!(
-            rates.get(&("USD".to_string(), dec31)),
+            rates.get(&dec31),
             Some(&None),
             "Dec 31 2023 (Sunday) must be cached as None, not left absent"
         );
@@ -223,7 +222,7 @@ mod tests {
             .await
             .unwrap();
 
-        let key = |m, d| ("USD".to_string(), NaiveDate::from_ymd_opt(2025, m, d).unwrap());
+        let key = |m, d| NaiveDate::from_ymd_opt(2025, m, d).unwrap();
 
         // Jan 1 (holiday) and Jan 4–5 (weekend) must be explicitly None.
         assert_eq!(rates[&key(1, 1)], None);
